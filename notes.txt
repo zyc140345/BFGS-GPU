@@ -1,0 +1,15 @@
+1. 把数据文件data/bfgs-large.dat复制到c:\temp\bfgs.dat
+2. 编译运行工程文件，可以看到下面的输出：
+
+###Data loading used 0.00386 s ...
+319 iterations
+f(x) = 9.99494e-05
+###Solver totally used 37.62939 s ...
+Solved!!!!
+
+3. 分析一下求解部分（37.6s）最耗时的部分在哪里？
+4. 使用CUDA对BFGS的求解过程进行并行加速。
+5. 一组简化的方程数据见data/bfgs-mid.dat
+6. BFGS算法的原理见：https://aria42.com/blog/2014/12/understanding-lbfgs
+
+

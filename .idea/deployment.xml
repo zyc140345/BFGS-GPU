@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="PublishConfigData" autoUpload="Always" serverName="3090-server-lan" remoteFilesAllowedToDisappearOnAutoupload="false">
+    <serverData>
+      <paths name="3090-server-lan">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/zyc/workspace/cuda_projects/bfgs-gpu" local="$PROJECT_DIR$" />
+          </mappings>
+          <excludedPaths>
+            <excludedPath local="true" path="$PROJECT_DIR$/cmake-build-release-3090-server-lan" />
+            <excludedPath local="true" path="$PROJECT_DIR$/cmake-build-debug-3090-server-lan" />
+          </excludedPaths>
+        </serverdata>
+      </paths>
+    </serverData>
+    <option name="myAutoUpload" value="ALWAYS" />
+  </component>
+</project>

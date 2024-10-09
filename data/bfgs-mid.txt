@@ -1,0 +1,16 @@
+Start   Eps = 1e-05 -----------------------------------------------------
+totally 166 Equations.
+
+Totally 192 Parameters.
+
+                        EsSolveEps:
+        METHOD ---> BFGS contains free variables.
+219 iterations
+f(x) = 9.84935e-05
+###Solver totally used 0.17621 s ...
+
+
+                        Solved Result:
+Ahhhh! Yea! I solved it!
+
+End -----------------------------------------------------
