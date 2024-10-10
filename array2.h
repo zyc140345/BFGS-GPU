@@ -112,12 +112,12 @@ public:
 	}
 
 	T operator[](size_t idx) const noexcept {
-		assert(idx < data_.size());
+		assert(idx < rows_ * cols_);
 		return data_[idx];
 	}
 
 	T& operator[](size_t idx) noexcept {
-		assert(idx < data_.size());
+		assert(idx < rows_ * cols_);
 		return data_[idx];
 	}
 
