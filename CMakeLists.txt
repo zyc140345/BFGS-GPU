@@ -4,8 +4,6 @@ project(bfgs_gpu)
 set(CMAKE_CXX_STANDARD 17)
 enable_language(CUDA)
 
-include_directories(.)
-
 find_package(OpenMP REQUIRED)
 if (OPENMP_FOUND)
     set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
@@ -13,7 +11,6 @@ if (OPENMP_FOUND)
     set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
 endif()
 
-add_executable(bfgs_cpu array2.h bfgs-cpu.cpp)
+add_executable(bfgs_cpu array2.h bfgs_cpu.cpp)
 
-add_executable(bfgs_gpu array2.h util.h bfgs-gpu.cu)
-set_target_properties(bfgs_gpu PROPERTIES CUDA_ARCHITECTURES "60")
+add_subdirectory(gpu)

@@ -5,11 +5,11 @@
 #include <cassert>
 #include <iostream>
 #include <vector>
-#include <deque>
 #include <cmath>
 
-#include "array2.h"
+#include "../array2.h"
 #include "util.h"
+#include "kernel.h"
 
 std::vector<int> objEqHeads, gradEqHeads;
 std::vector<double> objEqVals, gradEqVals;
@@ -82,11 +82,8 @@ double epsZero2 = 1e-7;
 #endif
 
 
-#define		BFGS_MAXIT	500
+#define		BFGS_MAXIT	318
 #define		BFGS_STEP	0.1
-
-
-constexpr int threadsPerBlock = 512;
 
 
 static int _GetMaxIt()
@@ -127,10 +124,25 @@ static double _VecDot(const std::vector<double>& a, const std::vector<double>& b
 {
     double s = 0;
     int n = a.size();
-    for (int i = 0; i < n; i++)
+    for (int i = 0; i < n; i++) {
         s += a[i] * b[i];
+    }
 
     return s;
+}
+
+static double _VecDot(const double *dev_a, const double *dev_b, int n)
+{
+    double result = 0.0;
+    double *dev_result;
+    HANDLE_ERROR(cudaMalloc((void **) &dev_result, sizeof(double)));
+    HANDLE_ERROR(cudaMemcpy(dev_result, &result, sizeof(double), cudaMemcpyHostToDevice));
+
+    int num_blocks = (n + threadsPerBlock - 1) / threadsPerBlock;
+    _VecDot_kernel<<<num_blocks, threadsPerBlock>>>(dev_a, dev_b, dev_result, n);
+    HANDLE_ERROR(cudaMemcpy(&result, dev_result, sizeof(double), cudaMemcpyDeviceToHost));
+
+    return result;
 }
 
 static void _VecMult(std::vector<double>& v, double t)
@@ -138,6 +150,12 @@ static void _VecMult(std::vector<double>& v, double t)
     int n = v.size();
     for (int i = 0; i < n; i++)
         v[i] *= t;
+}
+
+static void _VecMult(double *dev_v, double t, int n)
+{
+    int num_blocks = (n + threadsPerBlock - 1) / threadsPerBlock;
+    _VecMult_kernel<<<num_blocks, threadsPerBlock>>>(dev_v, t, n);
 }
 
 static double _VecAdd(const std::vector<double>& a, const std::vector<double>& b, std::vector<double>& ret)
@@ -159,11 +177,24 @@ static double _VecLen(const std::vector<double>& v)
     return sqrt(_VecDot(v, v));
 }
 
+static double _VecLen(const double *dev_v, int n)
+{
+    return sqrt(_VecDot(dev_v, dev_v, n));
+}
+
 static void _VecNorm(std::vector<double>& v)
 {
     double tmp = _VecLen(v);
     if (tmp > 0.0) {
         _VecMult(v, 1.0 / tmp);
+    }
+}
+
+static void _VecNorm(double *dev_v, int n)
+{
+    double tmp = _VecLen(dev_v, n);
+    if (tmp > 0.0) {
+        _VecMult(dev_v, 1.0 / tmp, n);
     }
 }
 
@@ -443,104 +474,47 @@ static double _CalcObj(const std::vector<double>& x0, double h, const std::vecto
     return _CalcObj(xt, eqs, eqNum);
 }
 
-static void _CalcyTH(const std::vector<double>& y, const array2<double>& H, std::vector<double>& yTH)
+static void _FillVec(double *dev_v, double value, int n)
 {
-    int	i, j;
-    int n = y.size();
-
-    std::fill(yTH.begin(), yTH.end(), 0.0);
-    for (j = 0; j < n; j++)
-        for (i = 0; i < n; i++) {
-            yTH[i] += (y[j] * H(j, i));
-        }
+    int num_blocks = (n + threadsPerBlock - 1) / threadsPerBlock;
+    _FillVec_kernel<<<num_blocks, threadsPerBlock>>>(dev_v, value, n);
 }
 
-__global__ void _CalcHy_kernel(const double *H, const double *y, double *Hy, int n) {
-    H += blockIdx.x * n;
-
-    __shared__ double cache[threadsPerBlock];
-    int vid = threadIdx.x + blockIdx.y * blockDim.x;
-    int cacheIndex = threadIdx.x;
-
-    double temp = 0;
-    while (vid < n) {
-        temp += H[vid] * y[vid];
-        vid += blockDim.x * gridDim.y;
-    }
-
-    // set the cache values
-    cache[cacheIndex] = temp;
-
-    // synchronize threads in this block
-    __syncthreads();
-
-    // for reductions, threadsPerBlock must be a power of 2
-    // because of the following code
-    int i = blockDim.x / 2;
-    while (i != 0) {
-        if (cacheIndex < i)
-            cache[cacheIndex] += cache[cacheIndex + i];
-        __syncthreads();
-        i /= 2;
-    }
-
-    if (cacheIndex == 0)
-        atomicAdd(Hy + blockIdx.x, cache[0]);
+static void _InitH(double *dev_H, int n)
+{
+    int blocksPerRow = imin(32, (n + threadsPerBlock - 1) / threadsPerBlock);
+    dim3 blocks(n, blocksPerRow);
+    _Identity_kernel<<<blocks, threadsPerBlock>>>(dev_H, n);
 }
 
-static void _CalcHy(const array2<double>& H, const std::vector<double>& y, std::vector<double>& Hy, double *t)
+static void _UpdateH(double *dev_H, const double *dev_s, const double *dev_Hy,
+                     const double *dev_yTH, double sy, double tmp, int n)
 {
-    int n = y.size();
-    int blocksPerVec = imin(32, (n + threadsPerBlock - 1) / threadsPerBlock);
+    int blocksPerRow = imin(32, (n + threadsPerBlock - 1) / threadsPerBlock);
+    dim3 blocks(n, blocksPerRow);
+    _UpdateH_kernel<<<blocks, threadsPerBlock>>>(
+            dev_H, dev_s, dev_Hy, dev_yTH, sy, tmp, n);
+}
 
-    cudaEvent_t start, stop;
-    HANDLE_ERROR(cudaEventCreate(&start));
-    HANDLE_ERROR(cudaEventCreate(&stop));
+static void _CalcyTH(const double *dev_y, const double *dev_H, double *dev_yTH, int n)
+{
+    int blocksPerCol = imin(32, (n + threadsPerBlock - 1) / threadsPerBlock);
+    dim3 blocks(n, blocksPerCol);
+    _CalcyTH_kernel<<<blocks, threadsPerBlock>>>(dev_y, dev_H, dev_yTH, n);
+}
 
-    const double *pH = H.data();
-    const double *py = y.data();
-    double *pHy = Hy.data();
-    double *dev_H;
-    double *dev_y;
-    double *dev_Hy;
-
-    HANDLE_ERROR(cudaMalloc((void **) &dev_H,
-                            n * n * sizeof(double)));
-    HANDLE_ERROR(cudaMalloc((void **) &dev_y,
-                            n * sizeof(double)));
-    HANDLE_ERROR(cudaMalloc((void **) &dev_Hy,
-                            n * sizeof(double)));
-    HANDLE_ERROR(cudaMemcpy(dev_H, pH, n * n * sizeof(double),
-                            cudaMemcpyHostToDevice));
-    HANDLE_ERROR(cudaMemcpy(dev_y, py, n * sizeof(double),
-                            cudaMemcpyHostToDevice));
-
-    dim3 blocks(n, blocksPerVec);
-    HANDLE_ERROR(cudaEventRecord(start, 0));
+static void _CalcHy(const double *dev_H, const double *dev_y, double *dev_Hy, int n)
+{
+    int blocksPerRow = imin(32, (n + threadsPerBlock - 1) / threadsPerBlock);
+    dim3 blocks(n, blocksPerRow);
     _CalcHy_kernel<<<blocks, threadsPerBlock>>>(dev_H, dev_y, dev_Hy, n);
-    HANDLE_ERROR(cudaEventRecord(stop, 0));
-    HANDLE_ERROR(cudaEventSynchronize(stop));
-    float elapsedTime;
-    HANDLE_ERROR(cudaEventElapsedTime(&elapsedTime, start, stop));
-    *t += elapsedTime;
-    HANDLE_ERROR(cudaMemcpy(pHy, dev_Hy, n * sizeof(double),
-                            cudaMemcpyDeviceToHost));
-
-    HANDLE_ERROR(cudaFree(dev_H));
-    HANDLE_ERROR(cudaFree(dev_y));
-    HANDLE_ERROR(cudaFree(dev_Hy));
-
-    HANDLE_ERROR(cudaEventDestroy(start));
-    HANDLE_ERROR(cudaEventDestroy(stop));
 }
 
-static void _Calcp(const array2<double>& H, const std::vector<double>& g, std::vector<double>& p, double *t)
+static void _Calcp(const double *dev_H, const double *dev_g, double *dev_p, int n)
 {
-    _CalcHy(H, g, p, t);
-
-    int n = p.size();
-    while (n--)
-        p[n] = -p[n];
+    int blocksPerRow = imin(32, (n + threadsPerBlock - 1) / threadsPerBlock);
+    dim3 blocks(n, blocksPerRow);
+    _CalcHy_kernel<<<blocks, threadsPerBlock>>>(dev_H, dev_g, dev_p, n, true);
 }
 
 #define BFGS_MAXBOUND	1e+10
@@ -770,10 +744,10 @@ int BFGSSolveEqs(char *data_path)
     int itCounter = 0;
 
     std::vector<double> gPrev, gNow, xPrev, p, y, s, yTH, Hy;  // p = H * g
-
-    array2<double> H;
+    array2<double> H(n, n);
 
     xPrev = xNow;
+    H.resize(n, n);
     gPrev.resize(n);
     gNow.resize(n);
     p.resize(n);
@@ -781,17 +755,28 @@ int BFGSSolveEqs(char *data_path)
     s.resize(n);
     yTH.resize(n);
     Hy.resize(n);
-    H.resize(n, n);
 
-    double t_step6_calc_hy = 0.0;
+    double *dev_H, *dev_p, *dev_y, *dev_s, *dev_g, *dev_yTH, *dev_Hy;
+    HANDLE_ERROR(cudaMalloc((void **) &dev_H, n * n * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc((void **) &dev_p, n * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc((void **) &dev_y, n * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc((void **) &dev_s, n * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc((void **) &dev_g, n * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc((void **) &dev_yTH, n * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc((void **) &dev_Hy, n * sizeof(double)));
+
+    float t_step6 = 0.0;
+    cudaEvent_t start, stop;
+    HANDLE_ERROR(cudaEventCreate(&start));
+    HANDLE_ERROR(cudaEventCreate(&stop));
 
 //STEP1:
     fPrev = _CalcObj(xNow, objEqs, numObjEqs);
     _CalcGrad(xNow, gPrev, gradEqs);
 
     STEP2:
+    _InitH(dev_H, n);
     for (int i = 0; i < n; i++) {
-        H(i, i) = 1.0;
         p[i] = -gPrev[i];
     }
     _VecNorm(p);
@@ -821,35 +806,54 @@ int BFGSSolveEqs(char *data_path)
     }
 
 //STEP6:
+    HANDLE_ERROR(cudaEventRecord(start, 0));
     _VecSub(gNow, gPrev, y);
     _VecSub(xNow, xPrev, s);
 
     {
         double sy = _VecDot(s, y);
-        if (fabs(sy) < epsZero1)
+        if (fabs(sy) < epsZero1) {
+            HANDLE_ERROR(cudaEventRecord(stop, 0));
+            HANDLE_ERROR(cudaEventSynchronize(stop));
+            float elapsedTime;
+            HANDLE_ERROR(cudaEventElapsedTime(&elapsedTime, start, stop));
+            t_step6 += elapsedTime / 1000;
             goto END;
+        }
 
-        _CalcyTH(y, H, yTH);
-        _CalcHy(H, y, Hy, &t_step6_calc_hy);
+        _FillVec(dev_yTH, 0.0, n);
+        _FillVec(dev_Hy, 0.0, n);
+        HANDLE_ERROR(cudaMemcpy(dev_y, y.data(), n * sizeof(double), cudaMemcpyHostToDevice));
+        _CalcyTH(dev_y, dev_H, dev_yTH, n);
+        _CalcHy(dev_H, dev_y, dev_Hy, n);
+        HANDLE_ERROR(cudaDeviceSynchronize());
 
-        double tmp = (1.0 + _VecDot(yTH, y) / sy);
-        for (int i = 0; i < n; i++)
-            for (int j = 0; j < n; j++)
-                H(i, j) += (((tmp * s[i] * s[j]) - Hy[i] * s[j] -
-                             s[i] * yTH[j]) / sy);
-        _Calcp(H, gNow, p, &t_step6_calc_hy);
-        _VecNorm(p);
+        double tmp = _VecDot(dev_yTH, dev_y, n);
+        tmp = 1.0 + tmp / sy;
+        HANDLE_ERROR(cudaMemcpy(dev_s, s.data(), n * sizeof(double), cudaMemcpyHostToDevice));
+        HANDLE_ERROR(cudaMemcpy(dev_g, gNow.data(), n * sizeof(double), cudaMemcpyHostToDevice));
+        _UpdateH(dev_H, dev_s, dev_Hy, dev_yTH, sy, tmp, n);
+        _Calcp(dev_H, dev_g, dev_p, n);
+        _VecNorm(dev_p, n);
+        HANDLE_ERROR(cudaMemcpy(p.data(), dev_p, n * sizeof(double), cudaMemcpyDeviceToHost));
 
         fPrev = fNow;
         _VecCopy(gPrev, gNow);
         _VecCopy(xPrev, xNow);
+
+        HANDLE_ERROR(cudaEventRecord(stop, 0));
+        HANDLE_ERROR(cudaEventSynchronize(stop));
+        float elapsedTime;
+        HANDLE_ERROR(cudaEventElapsedTime(&elapsedTime, start, stop));
+        t_step6 += elapsedTime / 1000;
+
         goto STEP3;
     }
 
     END:
     std::cout << itCounter << " iterations" << std::endl;
     std::cout << "f(x) = " << fNow << std::endl;
-    printf("Calc Hy used %2.5f s\n", t_step6_calc_hy / 1000);
+    printf("### Step6 used %2.5f s ...\n", t_step6);
 
     //Put results back...
     if (fNow < eps) {
@@ -860,11 +864,19 @@ int BFGSSolveEqs(char *data_path)
         printf("Solver Failed!!!!\n");
         return false;
     }
+
+    HANDLE_ERROR(cudaFree(dev_H));
+    HANDLE_ERROR(cudaFree(dev_p));
+    HANDLE_ERROR(cudaFree(dev_y));
+    HANDLE_ERROR(cudaFree(dev_s));
+    HANDLE_ERROR(cudaFree(dev_g));
+    HANDLE_ERROR(cudaFree(dev_yTH));
+    HANDLE_ERROR(cudaFree(dev_Hy));
 }
 
 int main()
 {
-    char data_path[] = "../data/bfgs-large.dat";
+    char data_path[] = "../../data/bfgs-large.dat";
     BFGSSolveEqs(data_path);
 }
 

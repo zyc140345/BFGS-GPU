@@ -811,7 +811,8 @@ STEP3:
         t_step6_calc_yth_hy += omp_get_wtime() - step_t0;
 
         step6_t0 = omp_get_wtime();
-		double tmp = (1.0 + _VecDot(yTH, y) / sy);
+        double tmp = _VecDot(yTH, y);
+		tmp = 1.0 + tmp / sy;
 		for (int i = 0; i < n; i++)
 			for (int j = 0; j < n; j++)
 				H(i, j) += (((tmp * s[i] * s[j]) - Hy[i] * s[j] -
