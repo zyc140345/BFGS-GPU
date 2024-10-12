@@ -5,7 +5,7 @@
 #ifndef BFGS_GPU_KERNEL_H
 #define BFGS_GPU_KERNEL_H
 
-constexpr int threadsPerBlock = 512;
+constexpr int threadsPerBlock = 256;
 
 __global__ void _FillVec_kernel(double *v, double value, int n);
 __global__ void _FillDiagonal_kernel(double *H, double value, int n);

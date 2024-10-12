@@ -407,8 +407,6 @@ void AnalysisEqs(const std::vector<EqInfo> &eqTab, int eqNum, std::vector<int> &
     for (int i = 0; i < eqNum; i++) {
         const EqInfo &eq = eqTab[i];
         int left = eq._left;
-        int right = eq._right;
-
         eqHeads[i] = left;
     }
 }
@@ -490,15 +488,25 @@ int BFGSSolveEqs(char *data_path) {
     CUDA_CHECK(cudaMalloc((void **) &dev_yTH, n * sizeof(double)));
     CUDA_CHECK(cudaMalloc((void **) &dev_Hy, n * sizeof(double)));
 
-    cudaEvent_t start, stop;
-    CUDA_CHECK(cudaEventCreate(&start));
-    CUDA_CHECK(cudaEventCreate(&stop));
-    cudaEvent_t g_start, g_stop;
+    cudaEvent_t g_start, g_stop;  // global
     CUDA_CHECK(cudaEventCreate(&g_start));
     CUDA_CHECK(cudaEventCreate(&g_stop));
+    cudaEvent_t s_start, s_stop;  // step
+    CUDA_CHECK(cudaEventCreate(&s_start));
+    CUDA_CHECK(cudaEventCreate(&s_stop));
+    cudaEvent_t s6_start, s6_stop;  // step6 sub step
+    CUDA_CHECK(cudaEventCreate(&s6_start));
+    CUDA_CHECK(cudaEventCreate(&s6_stop));
 
-    cublasHandle_t cublasH;
-    CUBLAS_CHECK(cublasCreate(&cublasH));
+    cudaStream_t s1, s2;
+    CUDA_CHECK(cudaStreamCreate(&s1));
+    CUDA_CHECK(cudaStreamCreate(&s2));
+
+    cublasHandle_t cublasH1, cublasH2;
+    CUBLAS_CHECK(cublasCreate(&cublasH1));
+    CUBLAS_CHECK(cublasCreate(&cublasH2));
+    CUBLAS_CHECK(cublasSetStream(cublasH1, s1));
+    CUBLAS_CHECK(cublasSetStream(cublasH2, s2));
 
     float t_total = 0.0;
     float t_step1 = 0.0;
@@ -507,28 +515,29 @@ int BFGSSolveEqs(char *data_path) {
     float t_step4 = 0.0;
     float t_step5 = 0.0;
     float t_step6 = 0.0;
+    float t_step6_update_H = 0.0;
 
 //STEP1:
     RecordStartTime(g_start);
-    RecordStartTime(start);
+    RecordStartTime(s_start);
     fPrev = CalcObj(xNow, objEqs, numObjEqs);
     CalcGrad(xNow, gPrev, gradEqs);
     FillVec(dev_H, 0.0, n * n);
-    t_step1 += RecordStopTime(start, stop);
+    t_step1 += RecordStopTime(s_start, s_stop);
 
 STEP2:
-    RecordStartTime(start);
+    RecordStartTime(s_start);
     FillDiagonal(dev_H, 1.0, n);
     for (int i = 0; i < n; i++) {
         p[i] = -gPrev[i];
     }
     VecNorm(p);
-    t_step2 += RecordStopTime(start, stop);
+    t_step2 += RecordStopTime(s_start, s_stop);
 
 STEP3:
-    RecordStartTime(start);
+    RecordStartTime(s_start);
     if (itCounter++ > itMax) {
-        t_step3 += RecordStopTime(start, stop);
+        t_step3 += RecordStopTime(s_start, s_stop);
         goto END;
     }
 
@@ -538,30 +547,30 @@ STEP3:
     std::cout << itCounter << " iterations, " << "f(x) = " << fNow << std::endl;
 
     if (fNow < eps) {
-        t_step3 += RecordStopTime(start, stop);
+        t_step3 += RecordStopTime(s_start, s_stop);
         goto END;
     }
 
     CalcGrad(xNow, gNow, gradEqs);
-    t_step3 += RecordStopTime(start, stop);
+    t_step3 += RecordStopTime(s_start, s_stop);
 
 //STEP4:
-    RecordStartTime(start);
+    RecordStartTime(s_start);
     if (HTerminate(xPrev, xNow, fPrev, fNow, gNow)) {
-        t_step4 += RecordStopTime(start, stop);
+        t_step4 += RecordStopTime(s_start, s_stop);
         goto END;
     }
 
 //STEP5:
-    RecordStartTime(start);
+    RecordStartTime(s_start);
     if (fNow > fPrev) {
         VecCopy(xNow, xPrev);
-        t_step5 += RecordStopTime(start, stop);
+        t_step5 += RecordStopTime(s_start, s_stop);
         goto STEP2;
     }
 
 //STEP6:
-    RecordStartTime(start);
+    RecordStartTime(s_start);
     VecSub(gNow, gPrev, y);
     VecSub(xNow, xPrev, s);
     CUDA_CHECK(cudaMemcpy(dev_y, y.data(), n * sizeof(double), cudaMemcpyHostToDevice));
@@ -571,19 +580,22 @@ STEP3:
     {
         double sy = VecDot(dev_s, dev_y, n);
         if (fabs(sy) < epsZero1) {
-            t_step6 += RecordStopTime(start, stop);
+            t_step6 += RecordStopTime(s_start, s_stop);
             goto END;
         }
 
-        CalcyTH(cublasH, dev_y, dev_H, dev_yTH, n);
-        CalcHy(cublasH, dev_H, dev_y, dev_Hy, n);
-        CUDA_CHECK(cudaDeviceSynchronize());
+        CalcyTH(cublasH1, dev_y, dev_H, dev_yTH, n);
+        CalcHy(cublasH2, dev_H, dev_y, dev_Hy, n);
+        CUDA_CHECK(cudaStreamSynchronize(s1));
+        CUDA_CHECK(cudaStreamSynchronize(s2));
 
         double tmp = VecDot(dev_yTH, dev_y, n);
         tmp = 1.0 + tmp / sy;
+        RecordStartTime(s6_start);
         UpdateH(dev_H, dev_s, dev_Hy, dev_yTH, sy, tmp, n);
+        t_step6_update_H += RecordStopTime(s6_start, s6_stop);
 
-        Calcp(cublasH, dev_H, dev_g, dev_p, n);
+        Calcp(cublasH1, dev_H, dev_g, dev_p, n);
         VecNorm(dev_p, n);
         CUDA_CHECK(cudaMemcpy(p.data(), dev_p, n * sizeof(double), cudaMemcpyDeviceToHost));
 
@@ -591,7 +603,7 @@ STEP3:
         VecCopy(gPrev, gNow);
         VecCopy(xPrev, xNow);
 
-        t_step6 += RecordStopTime(start, stop);
+        t_step6 += RecordStopTime(s_start, s_stop);
         goto STEP3;
     }
 
@@ -607,6 +619,7 @@ STEP3:
     printf("    Step4 used %2.5f s\n", t_step4);
     printf("    Step5 used %2.5f s\n", t_step5);
     printf("    Step6 used %2.5f s\n", t_step6);
+    printf("    Step6 Update H used %2.5f s\n", t_step6_update_H);
 
     //Put results back...
     if (fNow < eps) {
@@ -625,12 +638,17 @@ STEP3:
     CUDA_CHECK(cudaFree(dev_yTH));
     CUDA_CHECK(cudaFree(dev_Hy));
 
-    CUDA_CHECK(cudaEventDestroy(start));
-    CUDA_CHECK(cudaEventDestroy(stop));
     CUDA_CHECK(cudaEventDestroy(g_start));
     CUDA_CHECK(cudaEventDestroy(g_stop));
+    CUDA_CHECK(cudaEventDestroy(s_start));
+    CUDA_CHECK(cudaEventDestroy(s_stop));
+    CUDA_CHECK(cudaEventDestroy(s6_start));
+    CUDA_CHECK(cudaEventDestroy(s6_stop));
 
-    CUBLAS_CHECK(cublasDestroy(cublasH));
+    CUDA_CHECK(cudaStreamDestroy(s1));
+    CUDA_CHECK(cudaStreamDestroy(s2));
+    CUBLAS_CHECK(cublasDestroy(cublasH1));
+    CUBLAS_CHECK(cublasDestroy(cublasH2));
 }
 
 int main() {
