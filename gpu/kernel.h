@@ -8,7 +8,7 @@
 constexpr int threadsPerBlock = 512;
 
 __global__ void _FillVec_kernel(double *v, double value, int n);
-__global__ void _Identity_kernel(double *H, int n);
+__global__ void _FillDiagonal_kernel(double *H, double value, int n);
 __global__ void _CalcHy_kernel(const double *H, const double *y, double *Hy, int n, bool flip = false);
 __global__ void _CalcyTH_kernel(const double *y, const double *H, double *yTH, int n);
 __global__ void _VecDot_kernel(const double *a, const double *b, double *c, int n);

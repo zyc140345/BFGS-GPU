@@ -10,14 +10,12 @@ __global__ void _FillVec_kernel(double *v, double value, int n) {
         v[tid] = value;
 }
 
-__global__ void _Identity_kernel(double *H, int n) {
+__global__ void _FillDiagonal_kernel(double *H, double value, int n) {
     // gridDim: (n_row, blocks_per_row)
     int vid = threadIdx.x + blockIdx.y * blockDim.x;
     while (vid < n) {
         if (vid == blockIdx.x)
-            H[blockIdx.x * n + vid] = 1;
-        else
-            H[blockIdx.x * n + vid] = 0;
+            H[blockIdx.x * n + vid] = value;
         vid += blockDim.x * gridDim.y;
     }
 }
@@ -139,8 +137,7 @@ __global__ void _UpdateH_kernel(double *H, const double *s, const double *Hy,
     while (j < n) {
         double s_j = s[j];
         double yTH_j = yTH[j];
-        H[i * n + j] += ((tmp * s_i * s_j) - Hy_i * s_j -
-                         s_i * yTH_j) / sy;
+        H[i * n + j] += (tmp * s_i * s_j - Hy_i * s_j - s_i * yTH_j) / sy;
         j += blockDim.x * gridDim.y;
     }
 }
