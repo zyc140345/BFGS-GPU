@@ -6,19 +6,19 @@
 #include "kernel.h"
 #include "util.h"
 
-void VecCopy(std::vector<double> &dst, const std::vector<double> &src) {
+void VecCopy(pinned_vector &dst, const pinned_vector &src) {
     auto n = src.size();
     for (int i = 0; i < n; i++)
         dst[i] = src[i];
 }
 
-void VecSub(const std::vector<double> &a, const std::vector<double> &b, std::vector<double> &ret) {
+void VecSub(const pinned_vector &a, const pinned_vector &b, pinned_vector &ret) {
     auto n = a.size();
     for (int i = 0; i < n; i++)
         ret[i] = a[i] - b[i];
 }
 
-double VecDot(const std::vector<double> &a, const std::vector<double> &b) {
+double VecDot(const pinned_vector &a, const pinned_vector &b) {
     double s = 0;
     auto n = a.size();
     for (int i = 0; i < n; i++) {
@@ -27,74 +27,60 @@ double VecDot(const std::vector<double> &a, const std::vector<double> &b) {
     return s;
 }
 
-double VecDot(const double *dev_a, const double *dev_b, int n) {
-    double result = 0.0;
-    double *dev_result;
-    CUDA_CHECK(cudaMalloc((void **) &dev_result, sizeof(double)));
-    CUDA_CHECK(cudaMemcpy(dev_result, &result, sizeof(double), cudaMemcpyHostToDevice));
-
-    int num_blocks = (n + threadsPerBlock - 1) / threadsPerBlock;
-    _VecDot_kernel<<<num_blocks, threadsPerBlock>>>(dev_a, dev_b, dev_result, n);
-    CUDA_CHECK(cudaMemcpy(&result, dev_result, sizeof(double), cudaMemcpyDeviceToHost));
-
+double VecDot(cublasHandle_t h, const double *dev_a, const double *dev_b, int n) {
+    double result;
+    CUBLAS_CHECK(cublasDdot(h, n, dev_a, 1, dev_b, 1, &result));
     return result;
 }
 
-void VecMult(std::vector<double> &v, double t) {
+void VecMult(pinned_vector &v, double t) {
     auto n = v.size();
     for (int i = 0; i < n; i++)
         v[i] *= t;
 }
 
-void VecMult(double *dev_v, double t, int n) {
-    int num_blocks = (n + threadsPerBlock - 1) / threadsPerBlock;
-    _VecMult_kernel<<<num_blocks, threadsPerBlock>>>(dev_v, t, n);
-}
-
-void VecAxPy(const std::vector<double> &a, double t, const std::vector<double> &b, std::vector<double> &ret) {
+void VecAxPy(const pinned_vector &a, double t, const pinned_vector &b, pinned_vector &ret) {
     auto n = a.size();
     for (int i = 0; i < n; i++)
         ret[i] = a[i] + b[i] * t;
 }
 
-double VecLen(const std::vector<double> &v) {
+double VecLen(const pinned_vector &v) {
     return sqrt(VecDot(v, v));
 }
 
-double VecLen(const double *dev_v, int n) {
-    return sqrt(VecDot(dev_v, dev_v, n));
-}
-
-void VecNorm(std::vector<double> &v) {
+void VecNorm(pinned_vector &v) {
     double tmp = VecLen(v);
     if (tmp > 0.0) {
         VecMult(v, 1.0 / tmp);
     }
 }
 
-void VecNorm(double *dev_v, int n) {
-    double tmp = VecLen(dev_v, n);
-    if (tmp > 0.0) {
-        VecMult(dev_v, 1.0 / tmp, n);
+void VecNorm(cublasHandle_t h, double *dev_v, int n) {
+    double norm;
+    CUBLAS_CHECK(cublasDnrm2(h, n, dev_v, 1, &norm));
+    if (norm > 0.0) {
+        double scale = 1.0 / norm;
+        CUBLAS_CHECK(cublasDscal(h, n, &scale, dev_v, 1));
     }
 }
 
-void FillVec(double *dev_v, double value, int n) {
+void FillVec(cudaStream_t s, double *dev_v, double value, int n) {
     int num_blocks = (n + threadsPerBlock - 1) / threadsPerBlock;
-    _FillVec_kernel<<<num_blocks, threadsPerBlock>>>(dev_v, value, n);
+    _FillVec_kernel<<<num_blocks, threadsPerBlock, 0, s>>>(dev_v, value, n);
 }
 
-void FillDiagonal(double *dev_H, double value, int n) {
+void FillDiagonal(cudaStream_t s, double *dev_H, double value, int n) {
     int blocksPerRow = imin(32, (n + threadsPerBlock - 1) / threadsPerBlock);
     dim3 blocks(n, blocksPerRow);
-    _FillDiagonal_kernel<<<blocks, threadsPerBlock>>>(dev_H, value, n);
+    _FillDiagonal_kernel<<<blocks, threadsPerBlock, 0, s>>>(dev_H, value, n);
 }
 
-void UpdateH(double *dev_H, const double *dev_s, const double *dev_Hy,
+void UpdateH(cudaStream_t s, double *dev_H, const double *dev_s, const double *dev_Hy,
              const double *dev_yTH, double sy, double tmp, int n) {
     int blocksPerRow = imin(32, (n + threadsPerBlock - 1) / threadsPerBlock);
     dim3 blocks(n, blocksPerRow);
-    _UpdateH_kernel<<<blocks, threadsPerBlock>>>(
+    _UpdateH_kernel<<<blocks, threadsPerBlock, 0, s>>>(
             dev_H, dev_s, dev_Hy, dev_yTH, sy, tmp, n);
 }
 

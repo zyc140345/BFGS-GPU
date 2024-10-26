@@ -119,12 +119,6 @@ __global__ void _VecDot_kernel(const double *a, const double *b, double *c, int 
         atomicAdd(c, cache[0]);
 }
 
-__global__ void _VecMult_kernel(double *v, double t, int n) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    if (tid < n)
-        v[tid] *= t;
-}
-
 __global__ void _UpdateH_kernel(double *H, const double *s, const double *Hy,
                                 const double *yTH, double sy, double tmp, int n) {
     // gridDim: (n_row, blocks_per_row)

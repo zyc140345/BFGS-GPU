@@ -10,6 +10,8 @@
           <excludedPaths>
             <excludedPath local="true" path="$PROJECT_DIR$/cmake-build-release-3090-server-lan" />
             <excludedPath local="true" path="$PROJECT_DIR$/cmake-build-debug-3090-server-lan" />
+            <excludedPath local="true" path="$PROJECT_DIR$/gpu/cmake-build-release-3090-server-lan" />
+            <excludedPath local="true" path="$PROJECT_DIR$/gpu/cmake-build-debug-3090-server-lan" />
           </excludedPaths>
         </serverdata>
       </paths>

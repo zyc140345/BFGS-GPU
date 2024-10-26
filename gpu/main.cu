@@ -6,12 +6,10 @@
 #include <iostream>
 #include <vector>
 #include <cmath>
-#include <omp.h>
+#include <cublas_v2.h>
 
-#include "../array2.h"
 #include "vec_mat_op.h"
 #include "util.h"
-#include "cublas_v2.h"
 
 std::vector<int> objEqHeads, gradEqHeads;
 std::vector<double> objEqVals, gradEqVals;
@@ -70,7 +68,7 @@ constexpr double epsZero2 = 1e-7;
 #define BFGS_MAXBOUND 1e+10
 
 
-void CalcEqNew2(const std::vector<double> &x, const std::vector<EqInfo> &etab,
+void CalcEqNew2(const pinned_vector &x, const std::vector<EqInfo> &etab,
                 int st, int ed, std::vector<double> &vtab) {
     for (int i = ed - 1; i >= st; i--) {
         const EqInfo &eq = etab[i];
@@ -164,7 +162,7 @@ void CalcEqNew2(const std::vector<double> &x, const std::vector<EqInfo> &etab,
     }
 }
 
-double CalcEqNew1(const std::vector<double> &x, const EqInfo &eq, const std::vector<EqInfo> &etab,
+double CalcEqNew1(const pinned_vector &x, const EqInfo &eq, const std::vector<EqInfo> &etab,
                   int item, const std::vector<int> &htab, int allNum, std::vector<double> &vtab) {
     int ed = item < 0 ? allNum : htab[item + 1];
     int st = item < 0 ? htab[-item] : htab[item];
@@ -231,8 +229,8 @@ double CalcEqNew1(const std::vector<double> &x, const EqInfo &eq, const std::vec
     return 0;
 }
 
-double CalcObj(const std::vector<double> &x, const std::vector<EqInfo> &eqs, int eqNum) {
-    std::vector<double> tmp;
+double CalcObj(const pinned_vector &x, const std::vector<EqInfo> &eqs, int eqNum) {
+    pinned_vector tmp;
     tmp.resize(eqNum);
 
 #pragma omp parallel for num_threads(10)  // 无数据依赖，可并行
@@ -243,24 +241,24 @@ double CalcObj(const std::vector<double> &x, const std::vector<EqInfo> &eqs, int
     return VecDot(tmp, tmp);
 }
 
-void CalcGrad(const std::vector<double> &x, std::vector<double> &g, const std::vector<EqInfo> &eqs) {
+void CalcGrad(const pinned_vector &x, pinned_vector &g, const std::vector<EqInfo> &eqs) {
     int n = x.size();
 
 #pragma omp parallel for num_threads(10)  // 无数据依赖，可并行
     for (int i = 0; i < n; i++) {
-        g[i] = CalcEqNew1(x, eqs[i], eqs, i == n - 1 ? -1 : i, gradEqHeads, gradEqVals.size(), gradEqVals);
+        g[i] = CalcEqNew1(x, eqs[i], eqs, i == n - 1 ? -i : i, gradEqHeads, gradEqVals.size(), gradEqVals);
     }
 }
 
-double CalcObj(const std::vector<double> &x0, double h, const std::vector<double> &p,
+double CalcObj(const pinned_vector &x0, double h, const pinned_vector &p,
                const std::vector<EqInfo> &eqs, int eqNum) {
-    std::vector<double> xt;
+    pinned_vector xt;
     xt.resize(x0.size());
     VecAxPy(x0, h, p, xt);
     return CalcObj(xt, eqs, eqNum);
 }
 
-void DetermineInterval(const std::vector<double> &x0, double h, const std::vector<double> &p,
+void DetermineInterval(const pinned_vector &x0, double h, const pinned_vector &p,
                        double *left, double *right,
                        const std::vector<EqInfo> &eqs, int eqNum) {
     double A, B, C, D, u, v, w, s, r;
@@ -317,8 +315,8 @@ void DetermineInterval(const std::vector<double> &x0, double h, const std::vecto
     }
 }
 
-void GodenSep(const std::vector<double> &x0, const std::vector<double> &p,
-              double left, double right, std::vector<double> &x,
+void GodenSep(const pinned_vector &x0, const pinned_vector &p,
+              double left, double right, pinned_vector &x,
               const std::vector<EqInfo> &eqs, int eqNum) {
     static double beta = 0.61803398874989484820;
     double t1, t2, f1, f2;
@@ -353,10 +351,10 @@ void GodenSep(const std::vector<double> &x0, const std::vector<double> &p,
     }
 }
 
-void LinearSearch(const std::vector<double> &x0,
-                  const std::vector<double> &p,
+void LinearSearch(const pinned_vector &x0,
+                  const pinned_vector &p,
                   double h,
-                  std::vector<double> &x,
+                  pinned_vector &x,
                   const std::vector<EqInfo> &eqs,
                   int eqNum) {
     double left, right;
@@ -373,12 +371,12 @@ void LinearSearch(const std::vector<double> &x0,
 #define    H_EPS2    1e-5
 #define    H_EPS3    1e-4
 
-bool HTerminate(const std::vector<double> &xPrev,
-                const std::vector<double> &xNow,
+bool HTerminate(const pinned_vector &xPrev,
+                const pinned_vector &xNow,
                 double fPrev, double fNow,
-                const std::vector<double> &gNow) {
+                const pinned_vector &gNow) {
     double ro;
-    std::vector<double> xDif(xNow.size());
+    pinned_vector xDif(xNow.size());
 
     if (VecLen(gNow) >= H_EPS3)
         return false;
@@ -416,7 +414,7 @@ int BFGSSolveEqs(char *data_path) {
     int itMax = BFGS_MAXIT;
     double step = BFGS_STEP;
 
-    std::vector<double> xNow, xKeep;
+    pinned_vector xNow, xKeep;
     std::vector<int> varMap, revMap;
     std::vector<EqInfo> objEqs;  // 目标函数
     int numObjEqs;
@@ -466,18 +464,14 @@ int BFGSSolveEqs(char *data_path) {
     int n = xNow.size();
     int itCounter = 0;
 
-    std::vector<double> gPrev, gNow, xPrev, p, y, s, yTH, Hy;  // p = H * g
-    array2<double> H(n, n);
+    pinned_vector gPrev, gNow, xPrev, p, y, s;  // p = H * g
 
     xPrev = xNow;
-    H.resize(n, n);
     gPrev.resize(n);
     gNow.resize(n);
     p.resize(n);
     y.resize(n);
     s.resize(n);
-    yTH.resize(n);
-    Hy.resize(n);
 
     double *dev_H, *dev_p, *dev_y, *dev_s, *dev_g, *dev_yTH, *dev_Hy;
     CUDA_CHECK(cudaMalloc((void **) &dev_H, n * n * sizeof(double)));
@@ -494,9 +488,6 @@ int BFGSSolveEqs(char *data_path) {
     cudaEvent_t s_start, s_stop;  // step
     CUDA_CHECK(cudaEventCreate(&s_start));
     CUDA_CHECK(cudaEventCreate(&s_stop));
-    cudaEvent_t s6_start, s6_stop;  // step6 sub step
-    CUDA_CHECK(cudaEventCreate(&s6_start));
-    CUDA_CHECK(cudaEventCreate(&s6_stop));
 
     cudaStream_t s1, s2;
     CUDA_CHECK(cudaStreamCreate(&s1));
@@ -515,19 +506,18 @@ int BFGSSolveEqs(char *data_path) {
     float t_step4 = 0.0;
     float t_step5 = 0.0;
     float t_step6 = 0.0;
-    float t_step6_update_H = 0.0;
 
 //STEP1:
     RecordStartTime(g_start);
     RecordStartTime(s_start);
     fPrev = CalcObj(xNow, objEqs, numObjEqs);
     CalcGrad(xNow, gPrev, gradEqs);
-    FillVec(dev_H, 0.0, n * n);
+    FillVec(s1, dev_H, 0.0, n * n);
     t_step1 += RecordStopTime(s_start, s_stop);
 
 STEP2:
     RecordStartTime(s_start);
-    FillDiagonal(dev_H, 1.0, n);
+    FillDiagonal(s1, dev_H, 1.0, n);
     for (int i = 0; i < n; i++) {
         p[i] = -gPrev[i];
     }
@@ -542,6 +532,7 @@ STEP3:
     }
 
     xPrev = xNow;
+    CUDA_CHECK(cudaStreamSynchronize(s1));
     LinearSearch(xPrev, p, step, xNow, objEqs, numObjEqs);
     fNow = CalcObj(xNow, objEqs, numObjEqs);
     std::cout << itCounter << " iterations, " << "f(x) = " << fNow << std::endl;
@@ -573,12 +564,15 @@ STEP3:
     RecordStartTime(s_start);
     VecSub(gNow, gPrev, y);
     VecSub(xNow, xPrev, s);
-    CUDA_CHECK(cudaMemcpy(dev_y, y.data(), n * sizeof(double), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(dev_s, s.data(), n * sizeof(double), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(dev_g, gNow.data(), n * sizeof(double), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpyAsync(dev_y, y.data(), n * sizeof(double),
+                               cudaMemcpyHostToDevice, s1));
+    CUDA_CHECK(cudaMemcpyAsync(dev_s, s.data(), n * sizeof(double),
+                               cudaMemcpyHostToDevice, s1));
+    CUDA_CHECK(cudaMemcpyAsync(dev_g, gNow.data(), n * sizeof(double),
+                               cudaMemcpyHostToDevice, s2));
 
     {
-        double sy = VecDot(dev_s, dev_y, n);
+        double sy = VecDot(cublasH1, dev_s, dev_y, n);
         if (fabs(sy) < epsZero1) {
             t_step6 += RecordStopTime(s_start, s_stop);
             goto END;
@@ -586,18 +580,16 @@ STEP3:
 
         CalcyTH(cublasH1, dev_y, dev_H, dev_yTH, n);
         CalcHy(cublasH2, dev_H, dev_y, dev_Hy, n);
-        CUDA_CHECK(cudaStreamSynchronize(s1));
-        CUDA_CHECK(cudaStreamSynchronize(s2));
 
-        double tmp = VecDot(dev_yTH, dev_y, n);
+        double tmp = VecDot(cublasH1, dev_yTH, dev_y, n);
         tmp = 1.0 + tmp / sy;
-        RecordStartTime(s6_start);
-        UpdateH(dev_H, dev_s, dev_Hy, dev_yTH, sy, tmp, n);
-        t_step6_update_H += RecordStopTime(s6_start, s6_stop);
+        CUDA_CHECK(cudaStreamSynchronize(s2));
+        UpdateH(s1, dev_H, dev_s, dev_Hy, dev_yTH, sy, tmp, n);
 
         Calcp(cublasH1, dev_H, dev_g, dev_p, n);
-        VecNorm(dev_p, n);
-        CUDA_CHECK(cudaMemcpy(p.data(), dev_p, n * sizeof(double), cudaMemcpyDeviceToHost));
+        VecNorm(cublasH1, dev_p, n);
+        CUDA_CHECK(cudaMemcpyAsync(p.data(), dev_p, n * sizeof(double),
+                                   cudaMemcpyDeviceToHost, s1));
 
         fPrev = fNow;
         VecCopy(gPrev, gNow);
@@ -619,7 +611,6 @@ STEP3:
     printf("    Step4 used %2.5f s\n", t_step4);
     printf("    Step5 used %2.5f s\n", t_step5);
     printf("    Step6 used %2.5f s\n", t_step6);
-    printf("    Step6 Update H used %2.5f s\n", t_step6_update_H);
 
     //Put results back...
     if (fNow < eps) {
@@ -642,8 +633,6 @@ STEP3:
     CUDA_CHECK(cudaEventDestroy(g_stop));
     CUDA_CHECK(cudaEventDestroy(s_start));
     CUDA_CHECK(cudaEventDestroy(s_stop));
-    CUDA_CHECK(cudaEventDestroy(s6_start));
-    CUDA_CHECK(cudaEventDestroy(s6_stop));
 
     CUDA_CHECK(cudaStreamDestroy(s1));
     CUDA_CHECK(cudaStreamDestroy(s2));

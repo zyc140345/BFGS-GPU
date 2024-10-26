@@ -6,4 +6,3 @@ set_target_properties(bfgs_gpu PROPERTIES CUDA_ARCHITECTURES "86")  # double ato
 add_compile_options(-G)  # for debugging
 target_compile_options(bfgs_gpu PRIVATE $<$<COMPILE_LANGUAGE:CUDA>: -Xcompiler=-fopenmp>)  # openmp
 target_link_libraries(bfgs_gpu -lcublas -lgomp)
-target_link_libraries(bfgs_gpu -lcublas)

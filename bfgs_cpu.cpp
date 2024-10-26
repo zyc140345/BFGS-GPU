@@ -425,7 +425,7 @@ static void _CalcGrad(const std::vector<double>& x, std::vector<double>& g,
 	int n = x.size();
 	for (int i = 0; i < n; i++) {
 		//double v1 = _CalcEq(x, eqs[i], eqs);
-		double v2 = _CalcEqNew1(x, eqs[i], eqs, i == n - 1 ? -1 : i, gradEqHeads, gradEqVals.size(), gradEqVals);
+		double v2 = _CalcEqNew1(x, eqs[i], eqs, i == n - 1 ? -i : i, gradEqHeads, gradEqVals.size(), gradEqVals);
 		//assert(v1 == v2);
 		g[i] = v2;
 	}
