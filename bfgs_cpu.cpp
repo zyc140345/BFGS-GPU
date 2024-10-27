@@ -477,15 +477,19 @@ static void _Calcp(const array2<double>& H, const std::vector<double>& g, std::v
 static void _DetermineInterval(
 	const std::vector<double>& x0, double h, const std::vector<double>& p,
 	double* left, double* right,
-	const std::vector<EqInfo>& eqs, int eqNum)
+	const std::vector<EqInfo>& eqs, int eqNum, double *t)
 {
 	double	A, B, C, D, u, v, w, s, r;
 
+    double t0 = omp_get_wtime();
 	A = _CalcObj(x0, 0.0, p, eqs, eqNum);
 	B = _CalcObj(x0, h, p, eqs, eqNum);
+    *t += omp_get_wtime() - t0;
 	if (B > A) {
 		s = -h;
+        t0 = omp_get_wtime();
 		C = _CalcObj(x0, s, p, eqs, eqNum);
+        *t += omp_get_wtime() - t0;
 		if (C > A) {
 			*left = -h;
 			*right = h;
@@ -505,7 +509,9 @@ static void _DetermineInterval(
 			return;
 		}
 		w = v + s;
+        t0 = omp_get_wtime();
 		C = _CalcObj(x0, w, p, eqs, eqNum);
+        *t += omp_get_wtime() - t0;
 		if (C >= B)
 			break;
 		u = v;
@@ -514,7 +520,9 @@ static void _DetermineInterval(
 		B = C;
 	}
 	r = (v + w) * 0.5;
+    t0 = omp_get_wtime();
 	D = _CalcObj(x0, r, p, eqs, eqNum);
+    *t += omp_get_wtime() - t0;
 	if (s < 0.0) {
 		if (D < B) {
 			*left = w;
@@ -540,16 +548,20 @@ static void _DetermineInterval(
 static void _GodenSep(
 	const std::vector<double>& x0, const std::vector<double>& p,
 	double left, double right, std::vector<double>& x,
-	const std::vector<EqInfo>& eqs, int eqNum)
+	const std::vector<EqInfo>& eqs, int eqNum, double *t)
 {
 	static double	beta = 0.61803398874989484820;
 	double			t1, t2, f1, f2;
 
 	t2 = left + beta * (right - left);
+    double t0 = omp_get_wtime();
 	f2 = _CalcObj(x0, t2, p, eqs, eqNum);
+    *t += omp_get_wtime() - t0;
 ENTRY1:
 	t1 = left + right - t2;
+    t0 = omp_get_wtime();
 	f1 = _CalcObj(x0, t1, p, eqs, eqNum);
+    *t += omp_get_wtime() - t0;
 ENTRY2:
 	if (fabs(t1 - t2) < epsZero2) {
 		t1 = (t1 + t2) / 2.0;
@@ -571,7 +583,9 @@ ENTRY2:
 		t1 = t2;
 		f1 = f2;
 		t2 = left + beta * (right - left);
+        t0 = omp_get_wtime();
 		f2 = _CalcObj(x0, t2, p, eqs, eqNum);
+        *t += omp_get_wtime() - t0;
 		goto ENTRY2;
 	}
 }
@@ -582,16 +596,17 @@ static void _LinearSearch(
 	double h,
 	std::vector<double>& x,
 	const std::vector<EqInfo>& eqs,
-	int eqNum)
+	int eqNum,
+    double *t)
 {
 	double	left, right;
 
-	_DetermineInterval(x0, h, p, &left, &right, eqs, eqNum);
+	_DetermineInterval(x0, h, p, &left, &right, eqs, eqNum, t);
 	if (left == right)
 		return;
 
 	//printf("%lf, %lf\n", left, right);
-	_GodenSep(x0, p, left, right, x, eqs, eqNum);
+	_GodenSep(x0, p, left, right, x, eqs, eqNum, t);
 }
 
 #define	H_EPS1	1e-5
@@ -728,14 +743,16 @@ int BFGSSolveEqs(char *data_path)
 
     double step3_t0;
     double t_step3_linear_search = 0.0;
+    double t_step3_linear_search_calc_obj = 0.0;
     double t_step3_calc_obj = 0.0;
     double t_step3_calc_grad = 0.0;
 
     double step6_t0;
     double t_step6_vec_sub = 0.0;
     double t_step6_vec_dot = 0.0;
-    double t_step6_calc_yth_hy = 0.0;
-    double t_step6_calc_h_p = 0.0;
+    double t_step6_calc_yth_hy_p = 0.0;
+    double t_step6_update_h = 0.0;
+    double t_step6_vec_norm = 0.0;
     double t_step6_vec_copy = 0.0;
 
 //STEP1:
@@ -759,7 +776,7 @@ STEP3:
 
     step_t0 = omp_get_wtime();
 	xPrev = xNow;
-	_LinearSearch(xPrev, p, step, xNow, objEqs, numObjEqs);
+	_LinearSearch(xPrev, p, step, xNow, objEqs, numObjEqs, &t_step3_linear_search_calc_obj);
     t_step3_linear_search += omp_get_wtime() - step_t0;
     step3_t0 = omp_get_wtime();
 	fNow = _CalcObj(xNow, objEqs, numObjEqs);
@@ -805,21 +822,27 @@ STEP3:
             goto END;
         }
 
-        step_t0 = omp_get_wtime();
+        step6_t0 = omp_get_wtime();
 		_CalcyTH(y, H, yTH);
 		_CalcHy(H, y, Hy);
-        t_step6_calc_yth_hy += omp_get_wtime() - step_t0;
+        t_step6_calc_yth_hy_p += omp_get_wtime() - step6_t0;
 
         step6_t0 = omp_get_wtime();
         double tmp = _VecDot(yTH, y);
+        t_step6_vec_dot += omp_get_wtime() - step6_t0;
+        step6_t0 = omp_get_wtime();
 		tmp = 1.0 + tmp / sy;
 		for (int i = 0; i < n; i++)
 			for (int j = 0; j < n; j++)
 				H(i, j) += (((tmp * s[i] * s[j]) - Hy[i] * s[j] -
 					s[i] * yTH[j]) / sy);
+        t_step6_update_h += omp_get_wtime() - step6_t0;
+        step6_t0 = omp_get_wtime();
 		_Calcp(H, gNow, p);
+        t_step6_calc_yth_hy_p += omp_get_wtime() - step6_t0;
+        step6_t0 = omp_get_wtime();
 		_VecNorm(p);
-        t_step6_calc_h_p += omp_get_wtime() - step6_t0;
+        t_step6_vec_norm += omp_get_wtime() - step6_t0;
 
         step6_t0 = omp_get_wtime();
 		fPrev = fNow;
@@ -843,13 +866,15 @@ END:
     printf("    Step6 used %2.5f s\n", t_step6);
     printf("### Step3 totally used %2.5f s ...\n", t_step3);
     printf("    LinearSearch used %2.5f s\n", t_step3_linear_search);
+    printf("    LinearSearch CalcObj used %2.5f s\n", t_step3_linear_search_calc_obj);
     printf("    CalcObj used %2.5f s\n", t_step3_calc_obj);
     printf("    CalcGrad used %2.5f s\n", t_step3_calc_grad);
     printf("### Step6 totally used %2.5f s ...\n", t_step6);
     printf("    VecSub used %2.5f s\n", t_step6_vec_sub);
     printf("    VecDot used %2.5f s\n", t_step6_vec_dot);
-    printf("    Calc yTH and Hy used %2.5f s\n", t_step6_calc_yth_hy);
-    printf("    Calc H and p used %2.5f s\n", t_step6_calc_h_p);
+    printf("    Calc yTH, Hy and p used %2.5f s\n", t_step6_calc_yth_hy_p);
+    printf("    Update H used %2.5f s\n", t_step6_update_h);
+    printf("    VecNorm used %2.5f s\n", t_step6_vec_norm);
     printf("    VecCopy used %2.5f s\n", t_step6_vec_copy);
 
 	//Put results back...

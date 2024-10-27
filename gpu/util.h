@@ -8,8 +8,8 @@
 #include <cstdio>
 #include <cublas_v2.h>
 
-void RecordStartTime(cudaEvent_t start);
-float RecordStopTime(cudaEvent_t start, cudaEvent_t stop);
+void RecordStartTime(cudaEvent_t start, cudaStream_t s);
+float RecordStopTime(cudaEvent_t start, cudaEvent_t stop, cudaStream_t s);
 
 void CudaCheck(cudaError_t err, const char *file, int line);
 void CublasCheck(cublasStatus_t err, const char *file, int line);

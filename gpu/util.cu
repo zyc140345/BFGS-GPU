@@ -4,12 +4,12 @@
 
 #include "util.h"
 
-void RecordStartTime(cudaEvent_t start) {
-    CUDA_CHECK(cudaEventRecord(start, nullptr));
+void RecordStartTime(cudaEvent_t start, cudaStream_t s) {
+    CUDA_CHECK(cudaEventRecord(start, s));
 }
 
-float RecordStopTime(cudaEvent_t start, cudaEvent_t stop) {
-    CUDA_CHECK(cudaEventRecord(stop, nullptr));
+float RecordStopTime(cudaEvent_t start, cudaEvent_t stop, cudaStream_t s) {
+    CUDA_CHECK(cudaEventRecord(stop, s));
     CUDA_CHECK(cudaEventSynchronize(stop));
     float elapsedTime;
     CUDA_CHECK(cudaEventElapsedTime(&elapsedTime, start, stop));

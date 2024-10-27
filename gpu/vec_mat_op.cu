@@ -78,7 +78,8 @@ void FillDiagonal(cudaStream_t s, double *dev_H, double value, int n) {
 
 void UpdateH(cudaStream_t s, double *dev_H, const double *dev_s, const double *dev_Hy,
              const double *dev_yTH, double sy, double tmp, int n) {
-    int blocksPerRow = imin(32, (n + threadsPerBlock - 1) / threadsPerBlock);
+    int blocksPerRow = (n + threadsPerBlock - 1) / threadsPerBlock;
+    blocksPerRow = imin(32, blocksPerRow);
     dim3 blocks(n, blocksPerRow);
     _UpdateH_kernel<<<blocks, threadsPerBlock, 0, s>>>(
             dev_H, dev_s, dev_Hy, dev_yTH, sy, tmp, n);
